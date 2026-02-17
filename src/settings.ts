@@ -23,6 +23,7 @@ export const STANDARD_GROUPING_OPTIONS = {
   heading: 'Group by heading / section',
   consecutive: 'Group consecutive lines',
   item: 'Split by item / paragraph',
+  none: 'No grouping (flat list)',
 } as const;
 
 /**
@@ -70,6 +71,7 @@ export interface TagSettings {
   middleMatter: boolean;      // Whether to use middle matter instead of front matter
   includeNotebooks: string[]; // List of notebook IDs to include in database (if empty, include all)
   excludeNotebooks: string[];  // List of notebook IDs to exclude from database
+  readBatchSize: number;       // Number of notes to fetch concurrently
 }
 
 export interface ResultSettings {
@@ -185,6 +187,7 @@ export async function getTagSettings(): Promise<TagSettings> {
     'itags.middleMatter',
     'itags.includeNotebooks',
     'itags.excludeNotebooks',
+    'itags.readBatchSize',
   ]);
   const tagRegex = settings['itags.tagRegex'] ? createSafeRegex(settings['itags.tagRegex'] as string, 'g', defTagRegex) : defTagRegex;
   const excludeRegex = settings['itags.excludeRegex'] ? createSafeRegex(settings['itags.excludeRegex'] as string, 'g', null) : null;
@@ -247,6 +250,7 @@ export async function getTagSettings(): Promise<TagSettings> {
     middleMatter: settings['itags.middleMatter'] as boolean,
     includeNotebooks,
     excludeNotebooks,
+    readBatchSize: settings['itags.readBatchSize'] as number || 10,
   };
 }
 
@@ -399,6 +403,18 @@ export async function registerSettings(): Promise<void> {
       label: 'Database: Exclude notebooks',
       description: 'Comma-separated list of notebook IDs to exclude from the database. Notes in these notebooks will not be processed for tags.',
     },
+    'itags.readBatchSize': {
+      value: 10,
+      type: SettingItemType.Int,
+      minimum: 1,
+      maximum: 50,
+      step: 1,
+      section: 'itags',
+      public: true,
+      advanced: true,
+      label: 'Database: Note read batch size',
+      description: 'Higher values are faster but use more memory. Default: 10.',
+    },
     'itags.updateAfterSync': {
       value: true,
       type: SettingItemType.Bool,
@@ -445,6 +461,14 @@ export async function registerSettings(): Promise<void> {
       label: 'Front matter: Highlight in editor',
       description: 'Requires restart',
     },
+    'itags.navPanelVisible': {
+      value: true,
+      type: SettingItemType.Bool,
+      section: 'itags',
+      public: true,
+      label: 'Navigation: Panel visible',
+      description: 'Show or hide the navigation panel. Useful on mobile where toggle commands are not accessible.',
+    },
     'itags.navPanelScope': {
       value: 'global',
       type: SettingItemType.String,
@@ -486,6 +510,14 @@ export async function registerSettings(): Promise<void> {
       advanced: true,
       label: 'Navigation: Panel style',
       description: 'Custom CSS for the navigation panel (toggle panel or restart app).',
+    },
+    'itags.searchPanelVisible': {
+      value: true,
+      type: SettingItemType.Bool,
+      section: 'itags',
+      public: true,
+      label: 'Search: Panel visible',
+      description: 'Show or hide the search panel. Useful on mobile where toggle commands are not accessible.',
     },
     'itags.waitForNote': {
       value: 1000,
