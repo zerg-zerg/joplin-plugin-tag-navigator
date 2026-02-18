@@ -2,7 +2,7 @@ import joplin from 'api';
 import { getResultSettings, getTagSettings, TagSettings } from './settings';
 import { NoteDatabase, ResultSet, intersectSets, unionSets } from './db';
 import { parseDateTag } from './parser';
-import { compareTagValues, sortTags } from './utils';
+import { compareTagValues, sortTags, processBatch } from './utils';
 import { clearObjectReferences, clearApiResponse } from './memory';
 
 /**
@@ -68,7 +68,7 @@ export async function runSearch(
     sortOrder?: string
   }
 ): Promise<GroupedResult[]> {
-  let currentNote = (await joplin.workspace.selectedNote());
+  let currentNote = (await joplin.workspace.selectedNote()) || {};
   const settings = await getTagSettings();
   const resultSettings = await getResultSettings();
   if (!groupingMode) {
@@ -118,7 +118,7 @@ async function getQueryResults(
         partResults = db.searchBy('tag', queryPart.tag, queryPart.negated);
 
       } else if (queryPart.externalId) {
-        if ((queryPart.externalId === 'current') && (currentNote.id)) {
+        if ((queryPart.externalId === 'current') && (currentNote?.id)) {
           partResults = db.searchBy('noteLinkId', currentNote.id, queryPart.negated);
         } else {
           partResults = db.searchBy('noteLinkId', queryPart.externalId, queryPart.negated);
@@ -274,6 +274,8 @@ async function processQueryResults(
   const groupedResults: GroupedResult[] = [];
   if (!queryResults) return groupedResults;
 
+  // First pass: build colour-grouped result objects synchronously
+  const pendingResults: GroupedResult[] = [];
   for (const externalId in queryResults) {
     const note = db.notes[externalId];
     const lineNumbers = Array.from(queryResults[externalId]).sort((a, b) => a - b);
@@ -305,27 +307,67 @@ async function processQueryResults(
     }
 
     // Create a separate result for each color
-    for (const [color, lineNumbers] of colorMap.entries()) {
-      if (lineNumbers.length === 0) {
+    for (const [color, lines] of colorMap.entries()) {
+      if (lines.length === 0) {
         continue;
       }
 
-      const colorResult: GroupedResult = {
+      pendingResults.push({
         externalId,
-        lineNumbers: [lineNumbers],
+        lineNumbers: [lines],
         text: [],
         html: [],
         color: color,
         title: '',
         tags: [], // Will be populated after grouping
-      };
-
-      groupedResults.push(await getTextAndTitleByGroup(colorResult, tagSettings.fullNotebookPath, groupingMode, db, tagSettings, contextExpansionStep));
+      });
     }
 
     // Clear map and lineNumbers array to prevent memory leaks
     colorMap.clear();
     lineNumbers.length = 0;
+  }
+
+  // Second pass: fetch note content in parallel batches
+  // Delegate 'none' to 'item' grouping; we flatten after
+  const effectiveMode = groupingMode === 'none' ? 'item' : groupingMode;
+  await processBatch(pendingResults, tagSettings.readBatchSize, async (colorResult) => {
+    const populated = await getTextAndTitleByGroup(colorResult, tagSettings.fullNotebookPath, effectiveMode, db, tagSettings, contextExpansionStep);
+    groupedResults.push(populated);
+  });
+
+  // Flatten: split each multi-section result into individual single-section results
+  if (groupingMode === 'none') {
+    const flattened: GroupedResult[] = [];
+    for (const result of groupedResults) {
+      if (result.text.length <= 1) {
+        flattened.push(result);
+        continue;
+      }
+      for (let i = 0; i < result.text.length; i++) {
+        flattened.push({
+          externalId: result.externalId,
+          title: result.title,
+          notebook: result.notebook,
+          updatedTime: result.updatedTime,
+          createdTime: result.createdTime,
+          color: result.color,
+          lineNumbers: [result.lineNumbers[i]],
+          text: [result.text[i]],
+          html: [result.html[i]],
+          tags: result.tags ? [result.tags[i]] : [],
+          textExpanded: result.textExpanded ? [result.textExpanded[i]] : undefined,
+          htmlExpanded: result.htmlExpanded ? [result.htmlExpanded[i]] : undefined,
+          expandLevels: result.expandLevels ? [result.expandLevels[i]] : undefined,
+          lineNumbersExpanded: result.lineNumbersExpanded ? [result.lineNumbersExpanded[i]] : undefined,
+        });
+      }
+      // Clear original multi-section container arrays after extraction
+      clearObjectReferences(result);
+    }
+    groupedResults.length = 0;
+    groupedResults.push(...flattened);
+    flattened.length = 0;
   }
 
   return groupedResults;
@@ -642,7 +684,8 @@ function extractTagsPerGroup(
       const lineTags = db.notes[externalId].getTagsAtLine(lineNumber);
       for (const tag of lineTags) {
         // Format tag (remove prefix, keep original format for accurate sorting)
-        const formattedTag = tag.replace(tagSettings.tagPrefix, '')
+        const formattedTag = (tag.startsWith(tagSettings.tagPrefix)
+            ? tag.slice(tagSettings.tagPrefix.length) : tag)
           .toLowerCase();
         uniqueTags.add(formattedTag);
       }
@@ -830,8 +873,17 @@ function sortSectionsWithinResult(
       const sortBy = sortByArray[i];
       const sortOrder = sortOrderArray?.[i]?.startsWith('d') ? -1 : 1;
 
-      // Skip default sorting criteria for section sorting
+      // Skip note-level sorting criteria for section sorting
       if (['created', 'modified', 'notebook', 'title'].includes(sortBy)) {
+        continue;
+      }
+
+      // Sort sections by their text content
+      if (sortBy === 'text') {
+        const aText = result.text[aIndex] || '';
+        const bText = result.text[bIndex] || '';
+        const comparison = aText.localeCompare(bText) * sortOrder;
+        if (comparison !== 0) return comparison;
         continue;
       }
 
@@ -909,6 +961,8 @@ export function sortResults<T extends SortableItem>(
   const sortByArray = effectiveSortBy?.toLowerCase()
     .split(',')
     .map(s => s.trim())
+    .map(s => s.startsWith(tagSettings.tagPrefix.toLowerCase())
+      ? s.slice(tagSettings.tagPrefix.length) : s)
     .filter(s => s);
 
   const sortOrderArray = effectiveSortOrder?.toLowerCase()
@@ -947,6 +1001,10 @@ export function sortResults<T extends SortableItem>(
         comparison = a.notebook.localeCompare(b.notebook) * sortOrder;
       } else if (sortBy === 'title') {
         comparison = a.title.localeCompare(b.title) * sortOrder;
+      } else if (sortBy === 'text') {
+        const aText = (a as any).text?.[0] ?? a.title;
+        const bText = (b as any).text?.[0] ?? b.title;
+        comparison = aText.localeCompare(bText) * sortOrder;
       } else if (a.tags && b.tags) {
         // For tag-based sorting, aggregate tags from all groups
         const aTags = a.tags ? sortTags(a.tags.flat(), tagSettings.valueDelim) : [];

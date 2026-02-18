@@ -3,7 +3,7 @@ import * as MarkdownIt from 'markdown-it';
 import * as markdownItMark from 'markdown-it-mark';
 import * as markdownItTaskLists from 'markdown-it-task-lists';
 import * as prism from './prism.js';
-import { TagSettings, getTagSettings, queryEnd, queryStart, getResultSettings, getStandardSortKeys, getStandardOrderKeys, getStandardGroupingKeys } from './settings';
+import { TagSettings, getTagSettings, queryEnd, queryStart, getResultSettings, getStandardGroupingKeys } from './settings';
 import { escapeRegex, mapPrefixClass } from './utils';
 import { GroupedResult, Query, runSearch, sortResults } from './search';
 import { noteIdRegex } from './parser';
@@ -63,6 +63,7 @@ export interface QueryRecord {
     sortBy?: string;
     sortOrder?: string;
     resultGrouping?: string;
+    resultToggle?: boolean;
     limit?: number;
   };
 }
@@ -116,6 +117,8 @@ interface PanelSettings {
   spaceReplace: string;
   resultColorProperty: string;
   resultGrouping: string;
+  tagPrefix: string;
+  valueDelim: string;
 }
 
 // Get the version of Joplin
@@ -169,6 +172,7 @@ export async function registerSearchPanel(panel: string): Promise<void> {
         <option value="modified">Modified</option>
         <option value="created">Created</option>
         <option value="title">Title</option>
+        <option value="text">Text</option>
         <option value="notebook">Notebook</option>
         <option value="custom">Custom</option>
       </select>
@@ -463,28 +467,11 @@ async function processValidatedMessage(
   } else if (message.name === 'updateSetting') {
 
     if (message.field.startsWith('result')) {
-      // Implement linear flow: standard options → settings, custom options → query
+      // Store overrides in per-query options; values matching the global default are cleared
       if (message.field === 'resultSort') {
         const validSortBy = ensureSortByString(message.value);
-        const standardSortValues = getStandardSortKeys();
-        
-        if (standardSortValues.includes(validSortBy)) {
-          // Standard option: update global setting, remove query override
-          await joplin.settings.setValue(`itags.${message.field}`, validSortBy);
-          if (searchParams.options?.sortBy) {
-            delete searchParams.options.sortBy;
-            // Clean up options object if it becomes empty
-            if (Object.keys(searchParams.options).length === 0) {
-              searchParams.options = undefined;
-            }
-          }
-        } else {
-          // Custom option: update query only, don't touch global setting
-          if (!searchParams.options) {
-            searchParams.options = {};
-          }
-          searchParams.options.sortBy = validSortBy;
-        }
+        const globalDefault = ensureSortByString(await joplin.settings.value('itags.resultSort'));
+        setQueryOption(searchParams, 'sortBy', validSortBy, globalDefault);
 
         // Sort and update results if available
         if (lastSearchResults && lastSearchResults.length > 0) {
@@ -495,25 +482,8 @@ async function processValidatedMessage(
 
       } else if (message.field === 'resultOrder') {
         const validSortOrder = ensureSortOrderString(message.value);
-        const standardSortOrders = getStandardOrderKeys();
-
-        if (standardSortOrders.includes(validSortOrder)) {
-          // Standard option: update global setting, remove query override
-          await joplin.settings.setValue(`itags.${message.field}`, validSortOrder);
-          if (searchParams.options?.sortOrder) {
-            delete searchParams.options.sortOrder;
-            // Clean up options object if it becomes empty
-            if (Object.keys(searchParams.options).length === 0) {
-              searchParams.options = undefined;
-            }
-          }
-        } else {
-          // Custom option (comma-separated): update query only
-          if (!searchParams.options) {
-            searchParams.options = {};
-          }
-          searchParams.options.sortOrder = validSortOrder;
-        }
+        const globalDefault = ensureSortOrderString(await joplin.settings.value('itags.resultOrder'));
+        setQueryOption(searchParams, 'sortOrder', validSortOrder, globalDefault);
 
         // Sort and update results if available
         if (lastSearchResults && lastSearchResults.length > 0) {
@@ -523,20 +493,12 @@ async function processValidatedMessage(
         }
 
       } else if (message.field === 'resultGrouping') {
-        // All grouping modes are standard values
         const validGroupingModes = getStandardGroupingKeys();
         if (typeof message.value === 'string' && validGroupingModes.includes(message.value)) {
-          // Standard option: update global setting, remove query override
-          await joplin.settings.setValue(`itags.${message.field}`, message.value);
-          if (searchParams.options?.resultGrouping) {
-            delete searchParams.options.resultGrouping;
-            // Clean up options object if it becomes empty
-            if (Object.keys(searchParams.options).length === 0) {
-              searchParams.options = undefined;
-            }
-          }
+          const globalDefault = await joplin.settings.value('itags.resultGrouping') as string || 'heading';
+          setQueryOption(searchParams, 'resultGrouping', message.value, globalDefault);
 
-          // Re-run search with new grouping from global setting
+          // Re-run search with new grouping
           if (lastSearchResults && lastSearchResults.length > 0 && searchParams.query && searchParams.query.length > 0) {
             const results = await runSearch(db, searchParams.query, message.value, searchParams.options);
             lastSearchResults = results; // Update cached results
@@ -546,8 +508,9 @@ async function processValidatedMessage(
           console.error(`Error in updateSetting: Invalid resultGrouping value: ${message.value}`);
         }
       } else if (message.field === 'resultToggle') {
-        // Handle resultToggle setting updates
-        await joplin.settings.setValue(`itags.${message.field}`, message.value);
+        const value = !!message.value;
+        const globalDefault = !!await joplin.settings.value('itags.resultToggle');
+        setQueryOption(searchParams, 'resultToggle', value, globalDefault);
       }
 
     } else if (message.field.startsWith('show')) {
@@ -772,6 +735,8 @@ export async function updatePanelSettings(panel: string, searchParams?: QueryRec
     'itags.spaceReplace',
     'itags.resultColorProperty',
     'itags.resultGrouping',
+    'itags.tagPrefix',
+    'itags.valueDelim',
   ]);
   
   // Use query-specific settings if available, otherwise use global settings
@@ -788,7 +753,7 @@ export async function updatePanelSettings(panel: string, searchParams?: QueryRec
   const settings: PanelSettings = {
     resultSort: resultSort,
     resultOrder: resultOrder,
-    resultToggle: joplinSettings['itags.resultToggle'] as boolean,
+    resultToggle: searchParams?.options?.resultToggle ?? joplinSettings['itags.resultToggle'] as boolean,
     resultMarker: joplinSettings['itags.resultMarker'] as boolean,
     showQuery: joplinSettings['itags.showQuery'] as boolean,
     expandedTagList: joplinSettings['itags.expandedTagList'] as boolean,
@@ -800,6 +765,8 @@ export async function updatePanelSettings(panel: string, searchParams?: QueryRec
     spaceReplace: joplinSettings['itags.spaceReplace'] as string,
     resultColorProperty: joplinSettings['itags.resultColorProperty'] as string,
     resultGrouping: resultGrouping,
+    tagPrefix: joplinSettings['itags.tagPrefix'] as string || '#',
+    valueDelim: joplinSettings['itags.valueDelim'] as string || '=',
   };
   createManagedTimeout(
     async () => {
@@ -1013,6 +980,7 @@ export async function setCheckboxState(
   // text: The text of the task list item, in order to ensure that the line matches
   // checked: A boolean indicating the desired state of the checkbox (true for checked, false for unchecked)
   let note = await joplin.data.get(['notes', message.externalId], { fields: ['body'] });
+  if (!note?.body) { return; }
   const lines: string[] = note.body.split('\n');
   clearApiResponse(note); // Clear API response after extracting data
   const line = lines[message.line];
@@ -1075,6 +1043,7 @@ async function replaceTagAll(
     const queryNotes = db.getQueryNotes();
     for (const externalId of queryNotes) {
       let note = await joplin.data.get(['notes', externalId], { fields: ['id', 'body'] });
+      if (!note) { continue; }
       const savedQuery = loadQuery(note);
       if (replaceTagInQuery(savedQuery, message.oldTag, message.newTag)) {
         await saveQuery(savedQuery, externalId);
@@ -1188,6 +1157,7 @@ export async function replaceTagInText(
     return;
   }
   let note = await joplin.data.get(['notes', externalId], { fields: ['body'] });
+  if (!note?.body) { return; }
   const lines: string[] = note.body.split('\n');
   clearApiResponse(note); // Clear API response after extracting data
 
@@ -1222,6 +1192,7 @@ export async function addTagToText(
   tagSettings: TagSettings
 ): Promise<void> {
   let note = await joplin.data.get(['notes', message.externalId], { fields: ['body'] });
+  if (!note?.body) { return; }
   const lines: string[] = note.body.split('\n');
   clearApiResponse(note); // Clear API response after extracting data
   const line = lines[message.line];
@@ -1257,6 +1228,7 @@ async function updateNote(
 ): Promise<void> {
   let selectedNote = await joplin.workspace.selectedNote();
   let targetNote = await joplin.data.get(['notes', message.externalId], { fields: ['id', 'title', 'body', 'markup_language', 'is_conflict', 'updated_time', 'parent_id'] });
+  if (!targetNote) { return; }
   clearApiResponse(targetNote); // Clear API response after getting note
 
   if (newBody !== targetNote.body) {
@@ -1465,6 +1437,14 @@ function validateQuery(query: QueryRecord): QueryRecord {
     }
   }
 
+  // Validate resultToggle — must be a boolean
+  if (query.options?.resultToggle != null) {
+    if (typeof query.options.resultToggle !== 'boolean') {
+      console.warn('validateQuery: invalid resultToggle:', query.options.resultToggle);
+      delete query.options.resultToggle;
+    }
+  }
+
   return query;
 }
 
@@ -1622,6 +1602,36 @@ async function showCustomSortDialog(
   } catch (error) {
     console.error('Error in showCustomSortDialog:', error);
     await joplin.views.dialogs.showMessageBox('Failed to open sort configuration dialog: ' + error.message);
+  }
+}
+
+/**
+ * Sets or clears a per-query option based on whether it differs from the
+ * global default. Stores only actual overrides so saved queries stay lean
+ * and continue to inherit changed global defaults.
+ * @param searchParams - Current query record (mutated in place)
+ * @param key - Option key to set or clear
+ * @param value - Normalised value from the panel
+ * @param globalDefault - Current global setting value
+ */
+function setQueryOption(
+  searchParams: QueryRecord,
+  key: string,
+  value: any,
+  globalDefault: any,
+): void {
+  if (value === globalDefault) {
+    // Matches global default — remove override
+    if (searchParams.options) {
+      delete searchParams.options[key];
+      if (Object.keys(searchParams.options).length === 0) {
+        searchParams.options = undefined;
+      }
+    }
+  } else {
+    // Differs from global — store as override
+    if (!searchParams.options) { searchParams.options = {}; }
+    searchParams.options[key] = value;
   }
 }
 

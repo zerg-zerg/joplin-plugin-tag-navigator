@@ -23,6 +23,21 @@ let lastSearchResults: GroupedResult[] = []; // Cache for search results
 let savedNoteState: { [key: string]: boolean } = {};
 
 /**
+ * Returns the tag at the cursor position in the given line, or null if none.
+ */
+function findTagAtCursor(lineInfo: { cursorPosition: number, lineStart: number, lineContent: string }, tagRegex: RegExp): string | null {
+  tagRegex.lastIndex = 0;
+  const posInLine = lineInfo.cursorPosition - lineInfo.lineStart;
+  let match: RegExpExecArray | null;
+  while ((match = tagRegex.exec(lineInfo.lineContent)) !== null) {
+    if (match.index <= posInLine && posInLine <= match.index + match[0].length) {
+      return match[0];
+    }
+  }
+  return null;
+}
+
+/**
  * Main plugin registration and initialization
  */
 joplin.plugins.register({
@@ -106,8 +121,38 @@ joplin.plugins.register({
     });
     await registerSearchPanel(searchPanel);
 
+    // Hide panels on startup if settings say so
+    if (!await joplin.settings.value('itags.searchPanelVisible')) {
+      await joplin.views.panels.hide(searchPanel);
+    }
+
+    /**
+     * Extends the current search query by forwarding the tag to the search
+     * panel, which owns the live query state. The panel calls handleTagClick
+     * (add to last group / toggle negation) then sendSearchMessage, which
+     * flows the updated query back to the main process.
+     * Shows the search panel if hidden.
+     */
+    const extendQuery = async (tag: string) => {
+      const panelState = await joplin.views.panels.visible(searchPanel);
+      if (!panelState) {
+        await joplin.views.panels.show(searchPanel);
+        await registerSearchPanel(searchPanel);
+        // Sync current query state so the panel can extend it
+        await updatePanelQuery(searchPanel, searchParams.query, searchParams.filter);
+        await updatePanelSettings(searchPanel, searchParams);
+      }
+      await joplin.views.panels.postMessage(searchPanel, {
+        name: 'extendQuery',
+        tag: tag,
+      });
+    };
+
     // Note navigation panel
     const navPanel = await joplin.views.panels.create('itags.navPanel');
+    if (!await joplin.settings.value('itags.navPanelVisible')) {
+      await joplin.views.panels.hide(navPanel);
+    }
     let tagLines: TagLine[] = [];
     let tagCount: TagCount = {};
 
@@ -144,6 +189,7 @@ joplin.plugins.register({
       // Update navigation panel
       if (await joplin.views.panels.visible(navPanel)) {
         let note = await joplin.workspace.selectedNote();
+        if (!note) { return; }
         if (note.body) {
           [tagLines, tagCount] = await getNavTagLines(note.body);
         }
@@ -229,12 +275,14 @@ joplin.plugins.register({
       label: 'Navigation panel: Toggle',
       iconName: 'fas fa-tags',
       execute: async () => {
-        if (await joplin.views.panels.visible(navPanel)) {
-          joplin.views.panels.hide(navPanel)
+        const wasVisible = await joplin.views.panels.visible(navPanel);
+        if (wasVisible) {
+          await joplin.views.panels.hide(navPanel);
         } else {
           await joplin.views.panels.show(navPanel);
           await joplin.commands.execute('itags.refreshPanel');
         }
+        await joplin.settings.setValue('itags.navPanelVisible', !wasVisible);
       },
     });
 
@@ -248,8 +296,13 @@ joplin.plugins.register({
         if (!panelState) {
           await registerSearchPanel(searchPanel);
           await focusSearchPanel(searchPanel);
+          await updatePanelQuery(searchPanel, searchParams.query, searchParams.filter);
           await updatePanelSettings(searchPanel, searchParams);
+          const results = await runSearch(DatabaseManager.getDatabase(), searchParams.query, searchParams.options?.resultGrouping, searchParams.options);
+          lastSearchResults = results;
+          await updatePanelResults(searchPanel, results, searchParams.query, searchParams.options);
         }
+        await joplin.settings.setValue('itags.searchPanelVisible', !panelState);
       },
     });
 
@@ -278,6 +331,67 @@ joplin.plugins.register({
           await updatePanelSettings(searchPanel, searchParams);
         }
         note = clearObjectReferences(note);
+      },
+    });
+
+    await joplin.commands.register({
+      name: 'itags.searchTagAtCursor',
+      label: 'Search tag at cursor',
+      iconName: 'fas fa-search',
+      execute: async () => {
+        try {
+          // Get current line content and cursor position from the editor
+          const lineInfo = await joplin.commands.execute('editor.execCommand', {
+            name: 'getCurrentLine'
+          });
+          if (!lineInfo) { return; }
+
+          const tagSettings = await getTagSettings();
+          const tagAtCursor = findTagAtCursor(lineInfo, tagSettings.tagRegex);
+          if (!tagAtCursor) { return; }
+
+          // Search for the tag (same pattern as navPanel searchTag)
+          searchParams = {
+            query: [[{ tag: tagAtCursor, negated: false }]],
+            filter: '',
+            displayInNote: 'false'
+          };
+          const panelState = await joplin.views.panels.visible(searchPanel);
+          if (!panelState) {
+            await joplin.views.panels.show(searchPanel);
+            await registerSearchPanel(searchPanel);
+            await focusSearchPanel(searchPanel);
+          }
+          await updatePanelQuery(searchPanel, searchParams.query, searchParams.filter);
+          await updatePanelSettings(searchPanel, searchParams);
+          const results = await runSearch(DatabaseManager.getDatabase(), searchParams.query, searchParams.options?.resultGrouping, searchParams.options);
+          lastSearchResults = results;
+          await updatePanelResults(searchPanel, results, searchParams.query, searchParams.options);
+        } catch (error) {
+          console.debug('itags.searchTagAtCursor: error', error);
+        }
+      },
+    });
+
+    await joplin.commands.register({
+      name: 'itags.extendQueryAtCursor',
+      label: 'Add tag to search',
+      iconName: 'fas fa-search-plus',
+      execute: async () => {
+        try {
+          const lineInfo = await joplin.commands.execute('editor.execCommand', {
+            name: 'getCurrentLine'
+          });
+          if (!lineInfo) { return; }
+
+          const tagSettings = await getTagSettings();
+          const tagAtCursor = findTagAtCursor(lineInfo, tagSettings.tagRegex);
+          if (!tagAtCursor) { return; }
+
+          await extendQuery(tagAtCursor);
+        } catch (error) {
+          console.debug('itags.extendQueryAtCursor: error', error);
+        }
       },
     });
 
@@ -389,6 +503,7 @@ joplin.plugins.register({
         await convertNoteToInlineTags(note, conversionSettings, tagSettings);
         note = clearObjectReferences(note);
         note = await joplin.workspace.selectedNote();
+        if (!note) { return; }
         try {
           await joplin.commands.execute('editor.setText', note.body);
         } catch (error) {
@@ -603,10 +718,34 @@ joplin.plugins.register({
     });
 
     await joplin.workspace.filterEditorContextMenu(async (object: any) => {
-      if (currentTableColumns.length > 0) {
+      // Check whether the cursor is on a tag
+      let showSearchTag = false;
+      try {
+        const lineInfo = await joplin.commands.execute('editor.execCommand', {
+          name: 'getCurrentLine'
+        });
+        if (lineInfo) {
+          const ts = await getTagSettings();
+          showSearchTag = findTagAtCursor(lineInfo, ts.tagRegex) !== null;
+        }
+      } catch (error) {
+        // Editor not available — leave hidden
+      }
+
+      if (showSearchTag || currentTableColumns.length > 0) {
+        object.items.push({ type: 'separator' });
+      }
+      if (showSearchTag) {
         object.items.push({
-          type: 'separator',
-        })
+          label: 'Search tag at cursor',
+          commandName: 'itags.searchTagAtCursor',
+        });
+        object.items.push({
+          label: 'Add tag to search',
+          commandName: 'itags.extendQueryAtCursor',
+        });
+      }
+      if (currentTableColumns.length > 0) {
         object.items.push({
           label: 'New table entry note',
           commandName: 'itags.createTableEntryNote',
@@ -749,6 +888,33 @@ joplin.plugins.register({
           await updateNavPanel(navPanel, tagLines, tagCount);
         }
       }
+      // Panel visibility settings (two-way sync with toggle commands)
+      if (event.keys.includes('itags.navPanelVisible')) {
+        const wantVisible = await joplin.settings.value('itags.navPanelVisible');
+        const isVisible = await joplin.views.panels.visible(navPanel);
+        if (wantVisible && !isVisible) {
+          await joplin.views.panels.show(navPanel);
+          await joplin.commands.execute('itags.refreshPanel');
+        } else if (!wantVisible && isVisible) {
+          await joplin.views.panels.hide(navPanel);
+        }
+      }
+      if (event.keys.includes('itags.searchPanelVisible')) {
+        const wantVisible = await joplin.settings.value('itags.searchPanelVisible');
+        const isVisible = await joplin.views.panels.visible(searchPanel);
+        if (wantVisible && !isVisible) {
+          await joplin.views.panels.show(searchPanel);
+          await registerSearchPanel(searchPanel);
+          await focusSearchPanel(searchPanel);
+          await updatePanelQuery(searchPanel, searchParams.query, searchParams.filter);
+          await updatePanelSettings(searchPanel, searchParams);
+          const results = await runSearch(DatabaseManager.getDatabase(), searchParams.query, searchParams.options?.resultGrouping, searchParams.options);
+          lastSearchResults = results;
+          await updatePanelResults(searchPanel, results, searchParams.query, searchParams.options);
+        } else if (!wantVisible && isVisible) {
+          await joplin.views.panels.hide(searchPanel);
+        }
+      }
     });
 
     await joplin.workspace.onNoteChange(async () => {
@@ -791,7 +957,7 @@ joplin.plugins.register({
       if (message.name === 'updateSetting') {
         await joplin.settings.setValue(message.field, message.value);
       }
-      if (message.name === "searchTag") {
+      if (message.name === 'searchTag') {
         if (message.isModifier && (await joplin.settings.value("itags.navPanelSearchTagByClick"))) {
           const db = DatabaseManager.getDatabase();
           const notesIdxs = Object.keys(db.searchBy("tag", message.tag, false));
@@ -815,8 +981,8 @@ joplin.plugins.register({
           // Reset to global settings for new searches (don't preserve existing options)
           searchParams = {
             query: [[{ tag: message.tag, negated: false }]],
-            filter: "",
-            displayInNote: "false",
+            filter: '',
+            displayInNote: 'false'
             // Don't preserve existing options - let it use global settings
           };
           const panelState = await joplin.views.panels.visible(searchPanel);
@@ -825,18 +991,10 @@ joplin.plugins.register({
             await registerSearchPanel(searchPanel);
             await focusSearchPanel(searchPanel);
           }
-
-          await updatePanelQuery(searchPanel, searchParams.query, searchParams.filter);
-          await updatePanelSettings(searchPanel, searchParams); // Update panel to reflect global settings
-          const results = await runSearch(
-            DatabaseManager.getDatabase(),
-            searchParams.query,
-            searchParams.options?.resultGrouping,
-            searchParams.options,
-          );
-          lastSearchResults = results; // Cache the results
-          await updatePanelResults(searchPanel, results, searchParams.query, searchParams.options);
         }
+      }
+      if (message.name === 'extendQuery') {
+        await extendQuery(message.tag);
       }
       clearObjectReferences(message);
     });

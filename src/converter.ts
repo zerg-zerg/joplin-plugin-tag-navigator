@@ -3,15 +3,16 @@ import { parseTagsFromFrontMatter, parseTagsLines } from './parser';
 import { sortTags } from './utils';
 import { ConversionSettings, TagSettings, getConversionSettings, getTagSettings } from './settings';
 import { clearObjectReferences, clearApiResponse } from './memory';
-import { 
-  saveTagConversionData, 
-  getTagConversionData, 
-  computeTagDiff, 
+import {
+  saveTagConversionData,
+  getTagConversionData,
+  computeTagDiff,
   removeJoplinTags,
   getAllTags,
   removeInlineTags,
   addInlineTags,
-  hasExistingTagLines
+  hasExistingTagLines,
+  setsEqual
 } from './tracker';
 
 /**
@@ -25,7 +26,9 @@ export function extractInlineTags(noteBody: string, tagSettings: TagSettings): s
   const bodyTags = parseTagsLines(noteBody, tagSettings);
   
   const allTags = [...frontMatterTags, ...bodyTags]
-    .map(tag => tag.tag.replace(tagSettings.tagPrefix, '').replace(RegExp(tagSettings.spaceReplace, 'g'), ' '))
+    .map(tag => (tag.tag.startsWith(tagSettings.tagPrefix)
+        ? tag.tag.slice(tagSettings.tagPrefix.length) : tag.tag)
+      .replace(RegExp(tagSettings.spaceReplace, 'g'), ' '))
     .filter(tag => tag.length > 0);
   
   // Remove duplicates
@@ -209,15 +212,16 @@ export async function convertNoteToJoplinTags(
     tagsToAddSet.clear();
   }
 
-  // Save conversion data
+  // Save conversion data only if tags have actually changed
   if (conversionSettings.enableTagTracking) {
-    // Get existing data to preserve inlineTags if they exist
     const existingData = await getTagConversionData(note.id);
-    await saveTagConversionData(note.id, {
-      joplinTags: currentInlineTags, // Tags we just converted from inline to Joplin
-      inlineTags: existingData?.inlineTags || [], // Preserve existing inline tags tracking
-      lastUpdated: Date.now()
-    });
+    if (!existingData || !setsEqual(currentInlineTags, existingData.joplinTags)) {
+      await saveTagConversionData(note.id, {
+        joplinTags: currentInlineTags,
+        inlineTags: existingData?.inlineTags || [],
+        lastUpdated: Date.now()
+      });
+    }
   }
 }
 
@@ -292,14 +296,15 @@ export async function convertNoteToInlineTags(
       await joplin.data.put(['notes', note.id], null, { body: updatedBody });
     }
 
-    // Save conversion data
-    // Get existing data to preserve joplinTags if they exist
+    // Save conversion data only if tags have actually changed
     const existingData = await getTagConversionData(note.id);
-    await saveTagConversionData(note.id, {
-      joplinTags: existingData?.joplinTags || [], // Preserve existing Joplin tags tracking
-      inlineTags: currentJoplinTags, // Tags we just converted from Joplin to inline
-      lastUpdated: Date.now()
-    });
+    if (!existingData || !setsEqual(currentJoplinTags, existingData.inlineTags)) {
+      await saveTagConversionData(note.id, {
+        joplinTags: existingData?.joplinTags || [],
+        inlineTags: currentJoplinTags,
+        lastUpdated: Date.now()
+      });
+    }
 
   } else {
     // Simple mode: replace tag lines with Joplin tags that don't already exist inline
@@ -331,8 +336,10 @@ export async function convertNoteToInlineTags(
       updatedBody = filteredLines.join('\n');
     }
 
-    await joplin.data.put(['notes', note.id], null, { body: updatedBody });
-    
+    if (updatedBody !== note.body) {
+      await joplin.data.put(['notes', note.id], null, { body: updatedBody });
+    }
+
     // Clear arrays
     lines.length = 0;
     if (filteredLines !== lines) {

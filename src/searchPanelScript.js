@@ -7,7 +7,7 @@ let results = [];
 let noteState = {}; // Global state to track collapsed/expanded state of notes
 
 // Standard sort values used throughout the script
-const STANDARD_SORT_VALUES = ['modified', 'created', 'title', 'notebook', 'custom'];
+const STANDARD_SORT_VALUES = ['modified', 'created', 'title', 'text', 'notebook', 'custom'];
 
 const noteIdRegex = /([a-zA-Z0-9]{32})/; // Matches noteId
 
@@ -43,6 +43,8 @@ let resultMarker = true;
 let selectMultiTags = 'first';
 let searchWithRegex = false;
 let spaceReplace = '_';
+let tagPrefix = '#';
+let valueDelim = '=';
 let dropdownIsOpen = false;
 let resultColorProperty = 'border';
 let resultGrouping = 'heading'; // Current result grouping setting
@@ -398,6 +400,10 @@ function processPanelMessage(message) {
             tagFilter.focus();
         }
 
+    } else if (message.message.name === 'extendQuery') {
+        handleTagClick(message.message.tag);
+        sendSearchMessage();
+
     } else if (message.message.name === 'updateNoteState') {
         // Restore saved note state from main process (true = expanded/visible, false = collapsed/hidden)
         try {
@@ -409,13 +415,19 @@ function processPanelMessage(message) {
     }
 }
 
+/** Builds a unique card key for collapse/expand state tracking. */
+function getCardKey(result) {
+    const base = `${result.externalId}|${result.color || 'default'}`;
+    if (resultGrouping === 'none') {
+        return `${base}|${Math.min(...result.lineNumbers[0])}`;
+    }
+    return base;
+}
+
 // Function to update note state and send to main process
-function updateNoteState(externalId, color, isExpanded) {
-    // Create a composite key
-    const key = `${externalId}|${color || 'default'}`;
-    
+function updateNoteState(cardKey, isExpanded) {
     // Update the state (true = expanded/visible, false = collapsed/hidden)
-    noteState[key] = isExpanded;
+    noteState[cardKey] = isExpanded;
     
     // Prune old entries to prevent unlimited growth
     pruneNoteState(100);
@@ -460,10 +472,9 @@ function clearNoteStateForNewResults() {
     const currentKeys = new Set();
     
     for (const result of results) {
-        const stateKey = `${result.externalId}|${result.color || 'default'}`;
-        currentKeys.add(stateKey);
+        currentKeys.add(getCardKey(result));
     }
-    
+
     // Remove entries that don't match current results
     const keysToRemove = Object.keys(noteState).filter(key => !currentKeys.has(key));
     keysToRemove.forEach(key => {
@@ -494,7 +505,7 @@ function clearSectionExpandStateForNewResults() {
     // Build set of valid key prefixes from current results
     const currentPrefixes = new Set();
     for (const result of results) {
-        currentPrefixes.add(`${result.externalId}|${result.color || 'default'}`);
+        currentPrefixes.add(getCardKey(result));
     }
 
     // Remove entries whose prefix doesn't match current results
@@ -684,6 +695,8 @@ function updatePanelSettings(message) {
     searchWithRegex = settings.searchWithRegex;
     selectMultiTags = settings.selectMultiTags;
     spaceReplace = settings.spaceReplace;
+    tagPrefix = settings.tagPrefix || '#';
+    valueDelim = settings.valueDelim || '=';
     resultGrouping = settings.resultGrouping || 'heading'; // Store resultGrouping setting
     
     // Sync panel state with Joplin settings - don't apply global toggle
@@ -918,10 +931,11 @@ function updateResultsArea() {
         contentContainer.classList.add('itags-search-resultContent');
         contentContainer.setAttribute('data-externalId', result.externalId);
         contentContainer.setAttribute('data-color', result.color);
+        contentContainer.setAttribute('data-card-key', getCardKey(result));
 
         // Create a composite key for note state lookup
-        const stateKey = `${result.externalId}|${result.color || 'default'}`;
-        
+        const stateKey = getCardKey(result);
+
         // Determine display state based on saved state or default
         if (stateKey in noteState) {
             // Use saved state (true = expanded/display:block, false = collapsed/display:none)
@@ -970,7 +984,7 @@ function updateResultsArea() {
             hasContent = true;
 
             // Context expansion: determine current level and select appropriate HTML
-            const stateKey = `${result.externalId}|${result.color || 'default'}|${index}`;
+            const stateKey = `${getCardKey(result)}|${index}`;
             const currentLevel = sectionExpandLevel[stateKey] || 0;
             const maxLevel = result.expandLevels?.[index] || 0;
 
@@ -1050,7 +1064,7 @@ function updateResultsArea() {
             contentContainer.style.display = isCollapsed ? 'block' : 'none';
             // Update the note state with the new state (after toggling)
             // true means expanded (display:block), false means collapsed (display:none)
-            updateNoteState(result.externalId, result.color, isCollapsed ? true : false);
+            updateNoteState(getCardKey(result), isCollapsed ? true : false);
         });
 
         // Add right-click context menu handler for note titles
@@ -1484,6 +1498,22 @@ function resetToGlobalSettings() {
     });
 }
 
+/** Extract sort key from a tag for sorting by its values/children. */
+function extractSortKey(tag) {
+    // Strip tag prefix (e.g., #)
+    const clean = tag.startsWith(tagPrefix) ? tag.slice(tagPrefix.length) : tag;
+    if (!clean) return null;
+    if (clean.includes(valueDelim)) {
+        const key = clean.split(valueDelim)[0];
+        return key || null;
+    }
+    const lastSlash = clean.lastIndexOf('/');
+    if (lastSlash > 0) {
+        return clean.substring(0, lastSlash);
+    }
+    return null;
+}
+
 function sendClearQuery() {
     webviewApi.postMessage({
         name: 'clearQuery'
@@ -1565,7 +1595,7 @@ function addLineNumberToTags(entryEl, text) {
     });
 }
 
-function createContextMenu(event, result=null, index=null, commands=['insertTag', 'searchTag', 'extendQuery', 'addTag', 'replaceTag', 'replaceAll', 'removeTag', 'removeAll'], expandLevel=0) {
+function createContextMenu(event, result=null, index=null, commands=['insertTag', 'searchTag', 'extendQuery', 'sortByTag', 'addToSort', 'addTag', 'replaceTag', 'replaceAll', 'removeTag', 'removeAll'], expandLevel=0) {
     // Prevent the default context menu from appearing
     event.preventDefault();
 
@@ -1794,6 +1824,64 @@ function createContextMenu(event, result=null, index=null, commands=['insertTag'
         cmdCount++;
     }
 
+    if (commands.includes('sortByTag') && extractSortKey(currentTag) !== null) {
+        const sortKey = extractSortKey(currentTag);
+        const sortByTag = document.createElement('span');
+        sortByTag.classList.add('itags-search-contextCommand');
+        sortByTag.textContent = `Sort by tag`;
+        addEventListenerWithTracking(sortByTag, 'click', () => {
+            // Add custom option to dropdown if needed
+            if (!Array.from(resultSort.options).some(opt => opt.value === sortKey)) {
+                const option = document.createElement('option');
+                option.value = sortKey;
+                option.text = sortKey;
+                resultSort.add(option);
+            }
+            resultSort.value = sortKey;
+            resultSort.setAttribute('data-prev-value', sortKey);
+            updateResultOrderDisplay('asc');
+            sendSetting('resultSort', sortKey);
+            sendSetting('resultOrder', 'asc');
+            removeContextMenu(contextMenu);
+        });
+        fragment.appendChild(sortByTag);
+        cmdCount++;
+    }
+
+    if (commands.includes('addToSort') && extractSortKey(currentTag) !== null) {
+        const sortKey = extractSortKey(currentTag);
+        const addToSort = document.createElement('span');
+        addToSort.classList.add('itags-search-contextCommand');
+        addToSort.textContent = `Add to sort`;
+        addEventListenerWithTracking(addToSort, 'click', () => {
+            const currentSortKeys = resultSort.value ? resultSort.value.split(',').map(s => s.trim()) : [];
+            // Skip if key already present
+            if (!currentSortKeys.includes(sortKey)) {
+                const newSortBy = currentSortKeys.length > 0
+                    ? currentSortKeys.join(',') + ',' + sortKey
+                    : sortKey;
+                const currentOrder = resultOrder.title || 'desc';
+                const newOrder = currentOrder + ',asc';
+
+                // Update dropdown with combined sort key
+                if (!Array.from(resultSort.options).some(opt => opt.value === newSortBy)) {
+                    const option = document.createElement('option');
+                    option.value = newSortBy;
+                    option.text = newSortBy;
+                    resultSort.add(option);
+                }
+                resultSort.value = newSortBy;
+                resultSort.setAttribute('data-prev-value', newSortBy);
+                updateResultOrderDisplay(newOrder);
+                sendSetting('resultSort', newSortBy);
+                sendSetting('resultOrder', newOrder);
+            }
+            removeContextMenu(contextMenu);
+        });
+        fragment.appendChild(addToSort);
+        cmdCount++;
+    }
+
     if (commands.includes('editQuery')) {
         // Create the "Edit query" command
         const editQuery = document.createElement('span');
@@ -1975,7 +2063,8 @@ function createContextMenu(event, result=null, index=null, commands=['insertTag'
         const groupingOptions = [
             { value: 'heading', label: 'Group by heading' },
             { value: 'consecutive', label: 'Group adjacent lines' },
-            { value: 'item', label: 'Split by item' }
+            { value: 'item', label: 'Split by item' },
+            { value: 'none', label: 'No grouping' }
         ];
 
         groupingOptions.forEach(option => {
@@ -2165,10 +2254,9 @@ function collapseResults() {
         resultNotes[i].style.display = 'none';
         
         // Update note state when collapsing all (setting to expanded=false)
-        const externalId = resultNotes[i].getAttribute('data-externalId');
-        const color = resultNotes[i].getAttribute('data-color');
-        if (externalId) {
-            updateNoteState(externalId, color, false);
+        const cardKey = resultNotes[i].getAttribute('data-card-key');
+        if (cardKey) {
+            updateNoteState(cardKey, false);
         }
     }
 }
@@ -2179,10 +2267,9 @@ function expandResults() {
         resultNotes[i].style.display = 'block';
         
         // Update note state when expanding all (setting to expanded=true)
-        const externalId = resultNotes[i].getAttribute('data-externalId');
-        const color = resultNotes[i].getAttribute('data-color');
-        if (externalId) {
-            updateNoteState(externalId, color, true);
+        const cardKey = resultNotes[i].getAttribute('data-card-key');
+        if (cardKey) {
+            updateNoteState(cardKey, true);
         }
     }
 }
@@ -2626,9 +2713,9 @@ function registerEventHandlers() {
         if (event.target.matches('.itags-search-tag') && event.target.classList.contains('range')) {
             createContextMenu(event, null, null, ['editQuery']);
         } else if (event.target.matches('.itags-search-tag') && (event.target.classList.contains('selected') || event.target.classList.contains('negated'))) {
-            createContextMenu(event, null, null, ['insertTag', 'searchTag', 'editQuery', 'extendQuery', 'replaceAll', 'removeAll']);
+            createContextMenu(event, null, null, ['insertTag', 'searchTag', 'editQuery', 'extendQuery', 'sortByTag', 'addToSort', 'replaceAll', 'removeAll']);
         } else if (event.target.matches('.itags-search-tag')) {
-            createContextMenu(event, null, null, ['insertTag', 'searchTag', 'extendQuery', 'replaceAll', 'removeAll']);
+            createContextMenu(event, null, null, ['insertTag', 'searchTag', 'extendQuery', 'sortByTag', 'addToSort', 'replaceAll', 'removeAll']);
         } else if (event.target.type !== 'text') {
             createContextMenu(event, null, null, []);
         }
