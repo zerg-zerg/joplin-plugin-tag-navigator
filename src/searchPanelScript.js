@@ -699,13 +699,16 @@ function updatePanelSettings(message) {
     valueDelim = settings.valueDelim || '=';
     resultGrouping = settings.resultGrouping || 'heading'; // Store resultGrouping setting
     
-    // Sync panel state with Joplin settings - don't apply global toggle
-    // Global toggle should only happen when user clicks the toggle button directly
+    // Sync panel state with Joplin settings
     const newResultToggleState = settings.resultToggle ? 'collapse' : 'expand';
-    // Update local state to match Joplin settings (affects future searches only)
+    // When the toggle state changes (e.g., loading a query with a different collapse
+    // setting), clear noteState so existing cards respect the new default.
+    if (resultToggleState !== null && newResultToggleState !== resultToggleState) {
+        noteState = {};
+    }
     resultToggleState = newResultToggleState;
     // Update the toggle button display to match current setting
-    resultToggle.innerHTML = settings.resultToggle ? 
+    resultToggle.innerHTML = settings.resultToggle ?
         '>' : 'v';  // Button shows the current state (collapse / expand)
 
     // Clean up custom dropdown options when setting to a standard value
@@ -1498,7 +1501,9 @@ function resetToGlobalSettings() {
     });
 }
 
-/** Extract sort key from a tag for sorting by its values/children. */
+/** Extract sort key from a tag for sorting by its values/children.
+ *  Uses the first parent segment so that deeply nested tags (e.g., //2025/01/24)
+ *  all share the same sort key and compare correctly across branches. */
 function extractSortKey(tag) {
     // Strip tag prefix (e.g., #)
     const clean = tag.startsWith(tagPrefix) ? tag.slice(tagPrefix.length) : tag;
@@ -1507,9 +1512,18 @@ function extractSortKey(tag) {
         const key = clean.split(valueDelim)[0];
         return key || null;
     }
-    const lastSlash = clean.lastIndexOf('/');
-    if (lastSlash > 0) {
-        return clean.substring(0, lastSlash);
+    const firstSlash = clean.indexOf('/');
+    if (firstSlash > 0 && firstSlash < clean.length - 1) {
+        return clean.substring(0, firstSlash);
+    }
+    // Tag starts with '/' — find the first non-empty parent segment
+    // e.g., //2025/01/25 → '/', /hello/world → '/hello'
+    // Mirrors parser.ts nested tag generation: parts.slice(0, i).join('/')
+    if (firstSlash === 0) {
+        const nextSlash = clean.indexOf('/', 1);
+        if (nextSlash > 0 && nextSlash < clean.length - 1) {
+            return clean.substring(0, nextSlash);
+        }
     }
     return null;
 }
@@ -1824,6 +1838,68 @@ function createContextMenu(event, result=null, index=null, commands=['insertTag'
         cmdCount++;
     }
 
+    if (commands.includes('editQuery')) {
+        // Create the "Edit query" command
+        const editQuery = document.createElement('span');
+        editQuery.classList.add('itags-search-contextCommand');
+        editQuery.textContent = `Edit query`;
+        addEventListenerWithTracking(editQuery, 'click', () => {
+            // Create an input field with the tag text
+            const input = createInputField(currentTag, target, (input) => {
+                const groupIndex = parseInt(target.dataset.groupIndex);
+                const tagIndex = parseInt(target.dataset.tagIndex);
+                if (groupIndex === undefined) { return; }
+                if (tagIndex === undefined) { return; }
+
+                const item = queryGroups[groupIndex][tagIndex];
+                const negated = input.value.trim().startsWith('!');
+                const currentNegated = item.negated;
+                const newTag = input.value.trim();
+                if (!newTag) { return; }
+                if (newTag === currentTag && negated === currentNegated) { return; }
+
+                if (newTag.includes('->')) {
+                    // Convert to range
+                    const parsed = parseRange(newTag);
+                    if (!isValidRange(parsed.minValue, parsed.maxValue)) {
+                        webviewApi.postMessage({ name: 'showWarning', message: 'Ranges require both min and max values. Use wildcards (e.g., prefix*) for open-ended searches.' });
+                        return;
+                    }
+                    Object.assign(item, parsed);
+                    delete item.tag;
+                    delete item.negated;
+                } else {
+                    // Convert to regular tag
+                    delete item.minValue;
+                    delete item.maxValue;
+                    if (negated) {
+                        item.tag = newTag.slice(1);
+                        item.negated = true;
+                    } else {
+                        item.tag = newTag;
+                        item.negated = false;
+                    }
+                    item.tag = item.tag
+                        .trim()
+                        .toLowerCase()
+                        .replace(RegExp('\\s', 'g'), spaceReplace);
+                }
+                updateQueryArea();
+                sendSearchMessage();
+            });
+            removeContextMenu(contextMenu);
+        });
+        fragment.appendChild(editQuery);
+        cmdCount++;
+    }
+
+    if ((cmdCount > 0) && (commands.includes('sortByTag') || commands.includes('addToSort'))
+        && extractSortKey(currentTag) !== null) {
+        const separator = document.createElement('hr');
+        separator.classList.add('itags-search-contextSeparator');
+        fragment.appendChild(separator);
+    }
+
     if (commands.includes('sortByTag') && extractSortKey(currentTag) !== null) {
         const sortKey = extractSortKey(currentTag);
         const sortByTag = document.createElement('span');
@@ -1879,61 +1955,6 @@ function createContextMenu(event, result=null, index=null, commands=['insertTag'
             removeContextMenu(contextMenu);
         });
         fragment.appendChild(addToSort);
-        cmdCount++;
-    }
-
-    if (commands.includes('editQuery')) {
-        // Create the "Edit query" command
-        const editQuery = document.createElement('span');
-        editQuery.classList.add('itags-search-contextCommand');
-        editQuery.textContent = `Edit query`;
-        addEventListenerWithTracking(editQuery, 'click', () => {
-            // Create an input field with the tag text
-            const input = createInputField(currentTag, target, (input) => {
-                const groupIndex = parseInt(target.dataset.groupIndex);
-                const tagIndex = parseInt(target.dataset.tagIndex);
-                if (groupIndex === undefined) { return; }
-                if (tagIndex === undefined) { return; }
-
-                const item = queryGroups[groupIndex][tagIndex];
-                const negated = input.value.trim().startsWith('!');
-                const currentNegated = item.negated;
-                const newTag = input.value.trim();
-                if (!newTag) { return; }
-                if (newTag === currentTag && negated === currentNegated) { return; }
-
-                if (newTag.includes('->')) {
-                    // Convert to range
-                    const parsed = parseRange(newTag);
-                    if (!isValidRange(parsed.minValue, parsed.maxValue)) {
-                        webviewApi.postMessage({ name: 'showWarning', message: 'Ranges require both min and max values. Use wildcards (e.g., prefix*) for open-ended searches.' });
-                        return;
-                    }
-                    Object.assign(item, parsed);
-                    delete item.tag;
-                    delete item.negated;
-                } else {
-                    // Convert to regular tag
-                    delete item.minValue;
-                    delete item.maxValue;
-                    if (negated) {
-                        item.tag = newTag.slice(1);
-                        item.negated = true;
-                    } else {
-                        item.tag = newTag;
-                        item.negated = false;
-                    }
-                    item.tag = item.tag
-                        .trim()
-                        .toLowerCase()
-                        .replace(RegExp('\\s', 'g'), spaceReplace);
-                }
-                updateQueryArea();
-                sendSearchMessage();
-            });
-            removeContextMenu(contextMenu);
-        });
-        fragment.appendChild(editQuery);
         cmdCount++;
     }
 
