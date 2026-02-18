@@ -684,7 +684,8 @@ function extractTagsPerGroup(
       const lineTags = db.notes[externalId].getTagsAtLine(lineNumber);
       for (const tag of lineTags) {
         // Format tag (remove prefix, keep original format for accurate sorting)
-        const formattedTag = tag.replace(tagSettings.tagPrefix, '')
+        const formattedTag = (tag.startsWith(tagSettings.tagPrefix)
+            ? tag.slice(tagSettings.tagPrefix.length) : tag)
           .toLowerCase();
         uniqueTags.add(formattedTag);
       }
@@ -872,8 +873,17 @@ function sortSectionsWithinResult(
       const sortBy = sortByArray[i];
       const sortOrder = sortOrderArray?.[i]?.startsWith('d') ? -1 : 1;
 
-      // Skip default sorting criteria for section sorting
+      // Skip note-level sorting criteria for section sorting
       if (['created', 'modified', 'notebook', 'title'].includes(sortBy)) {
+        continue;
+      }
+
+      // Sort sections by their text content
+      if (sortBy === 'text') {
+        const aText = result.text[aIndex] || '';
+        const bText = result.text[bIndex] || '';
+        const comparison = aText.localeCompare(bText) * sortOrder;
+        if (comparison !== 0) return comparison;
         continue;
       }
 
@@ -951,6 +961,8 @@ export function sortResults<T extends SortableItem>(
   const sortByArray = effectiveSortBy?.toLowerCase()
     .split(',')
     .map(s => s.trim())
+    .map(s => s.startsWith(tagSettings.tagPrefix.toLowerCase())
+      ? s.slice(tagSettings.tagPrefix.length) : s)
     .filter(s => s);
 
   const sortOrderArray = effectiveSortOrder?.toLowerCase()
@@ -989,6 +1001,10 @@ export function sortResults<T extends SortableItem>(
         comparison = a.notebook.localeCompare(b.notebook) * sortOrder;
       } else if (sortBy === 'title') {
         comparison = a.title.localeCompare(b.title) * sortOrder;
+      } else if (sortBy === 'text') {
+        const aText = (a as any).text?.[0] ?? a.title;
+        const bText = (b as any).text?.[0] ?? b.title;
+        comparison = aText.localeCompare(bText) * sortOrder;
       } else if (a.tags && b.tags) {
         // For tag-based sorting, aggregate tags from all groups
         const aTags = a.tags ? sortTags(a.tags.flat(), tagSettings.valueDelim) : [];
