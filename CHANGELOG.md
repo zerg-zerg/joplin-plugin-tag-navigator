@@ -13,6 +13,8 @@
 
 <img width="416" height="80" alt="image" src="https://github.com/user-attachments/assets/187f8966-7306-4481-82a0-f4cabb0a7e7d" />
 
+**Full Changelog**: https://github.com/alondmnt/joplin-plugin-tag-navigator/compare/v2.9.1...v2.10.0
+
 ---
 
 # [v2.9.1](https://github.com/alondmnt/joplin-plugin-tag-navigator/releases/tag/v2.9.1)
