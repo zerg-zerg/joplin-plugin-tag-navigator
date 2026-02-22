@@ -349,7 +349,7 @@ function parseFilter(filter: string, min_chars: number = 1, escape_regex: boolea
   let match: RegExpExecArray;
   const quotes = [];
   while ((match = REGEX.quotedText.exec(filter)) !== null) {
-    quotes.push(match[1]);
+    quotes.push(match[1].toLowerCase());
     filter = filter.replace(match[0], '');
   }
   let words = filter.replace('"', '').toLowerCase()

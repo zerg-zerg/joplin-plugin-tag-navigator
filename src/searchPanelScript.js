@@ -680,7 +680,7 @@ function parseFilter(filter, min_chars=1) {
     let match;
     const quotes = [];
     while ((match = regex.exec(filter)) !== null) {
-        quotes.push(match[1]);
+        quotes.push(match[1].toLowerCase());
         filter = filter.replace(match[0], '');
     }
     const words = filter.replace('"', '').toLowerCase()
