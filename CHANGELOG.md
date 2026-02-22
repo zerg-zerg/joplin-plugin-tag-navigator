@@ -1,3 +1,16 @@
+# v2.10.0
+
+- added: query mode 'CNF', AND of groups of tags (default for new queries)
+- added: right-click in query area to switch between AND (all groups) and OR (any group) modes
+- added: shift+click on nav panel tag to insert into editor (#35)
+- improved: focus command shows search panel if hidden
+- improved: return focus to editor when hiding nav/search panels
+- improved: search tag at cursor keyboard shortcut (Ctrl+Alt+T) (#35)
+- fixed: filter highlighting breaking kanban note views
+- fixed: quoted filter phrases were case-sensitive
+
+---
+
 # v2.9.1
 
 - added: "sort by tag" and "add to sort" context menu commands
