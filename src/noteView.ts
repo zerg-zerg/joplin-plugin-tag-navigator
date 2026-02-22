@@ -100,7 +100,8 @@ export async function displayResultsInNote(
   const results = await runSearch(db, savedQuery);
 
   // Apply filtering and limit
-  let filteredResults = await filterResults(results, savedQuery.filter, viewSettings);
+  const highlight = savedQuery.displayInNote !== 'kanban';
+  let filteredResults = await filterResults(results, savedQuery.filter, viewSettings, highlight);
   if (savedQuery.options?.limit > 0) {
     filteredResults = filteredResults.slice(0, savedQuery.options.limit);
   }
@@ -238,9 +239,10 @@ export async function removeResults(note: { id: string, body: string }): Promise
  * @returns Filtered and sorted results array
  */
 async function filterResults(
-  results: GroupedResult[], 
-  filter: string, 
-  viewSettings: NoteViewSettings
+  results: GroupedResult[],
+  filter: string,
+  viewSettings: NoteViewSettings,
+  highlight: boolean = true
 ): Promise<GroupedResult[]> {
   if (!filter) { return results; }
 
@@ -268,7 +270,7 @@ async function filterResults(
     note.text = note.text.filter((_, i) => filteredIndices.includes(i));
     note.lineNumbers = note.lineNumbers.filter((_, i) => filteredIndices.includes(i));
 
-    if ((inclusionPatterns.length > 0 && viewSettings.resultMarkerInNote && filterRegExp)) {
+    if ((highlight && inclusionPatterns.length > 0 && viewSettings.resultMarkerInNote && filterRegExp)) {
       note.text = note.text.map(text => text.replace(filterRegExp, '==$1=='));
       note.title = note.title.replace(filterRegExp, '==$1==');
     }
