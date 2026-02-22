@@ -797,6 +797,10 @@ joplin.plugins.register({
         accelerator: 'Ctrl+Shift+L',
       },
       {
+        commandName: 'itags.searchTagAtCursor',
+        accelerator: 'Ctrl+Alt+T',
+      },
+      {
         commandName: 'itags.toggleNoteView',
       },
       {

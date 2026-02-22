@@ -525,6 +525,7 @@ For the Markdown editor see Rich Markdown in the [Companion plugins](#companion-
 | Ctrl + Shift + I | Focus on search panel (search tag / insert tag) |
 | Ctrl + Shift + R | Refresh the current note view |
 | Ctrl + Shift + D | Update tag database |
+| Ctrl + Alt + T   | Search tag at cursor |
 | Ctrl + Alt + D   | Replace date tags in current lines |
 | Ctrl + Shift + L | Load search query from current note |
 
