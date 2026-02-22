@@ -689,7 +689,7 @@ export async function registerSettings(): Promise<void> {
       label: 'Search: Highlight filter / tag results',
     },
     'itags.resultMarkerInNote': {
-      value: true,
+      value: false,
       type: SettingItemType.Bool,
       section: 'itags',
       public: true,
