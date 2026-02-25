@@ -10,7 +10,12 @@ document.addEventListener('click', event => {
   }
 
   if (element.classList.contains('itags-nav-globalTag')) {
-    if (event.ctrlKey) {
+    if (event.shiftKey) {
+      webviewApi.postMessage({
+        name: 'insertTag',
+        tag: element.dataset.tag,
+      });
+    } else if (event.ctrlKey) {
         webviewApi.postMessage({
       		name: 'searchTag',
      		tag: element.dataset.tag,

@@ -48,6 +48,8 @@ let valueDelim = '=';
 let dropdownIsOpen = false;
 let resultColorProperty = 'border';
 let resultGrouping = 'heading'; // Current result grouping setting
+const DEFAULT_QUERY_MODE = 'cnf'; // Must match DEFAULT_QUERY_MODE in settings.ts
+let queryMode = DEFAULT_QUERY_MODE; // Current query mode: 'dnf' (OR-of-ANDs) or 'cnf' (AND-of-ORs)
 let sectionExpandLevel = {};  // Maps "noteId|color|sectionIndex" -> level (0-3)
 let isSearching = false;  // True while waiting for search results
 
@@ -335,6 +337,7 @@ function processPanelMessage(message) {
             console.error('Failed to parse saved query:', message.message.query, e);
         }
         queryGroups = queryGroupsCand;
+        queryMode = message.message.mode || 'dnf';
         if (resultFilter) {
             resultFilter.value = message.message.filter ? message.message.filter : '';
         }
@@ -677,7 +680,7 @@ function parseFilter(filter, min_chars=1) {
     let match;
     const quotes = [];
     while ((match = regex.exec(filter)) !== null) {
-        quotes.push(match[1]);
+        quotes.push(match[1].toLowerCase());
         filter = filter.replace(match[0], '');
     }
     const words = filter.replace('"', '').toLowerCase()
@@ -817,10 +820,12 @@ function hideElements(settings) {
 function updateQueryArea() {
     clearNode(queryArea);
     const fragment = document.createDocumentFragment();
+    const groupOp = queryMode === 'cnf' ? 'AND' : 'OR';
+    const withinOp = queryMode === 'cnf' ? 'OR' : 'AND';
 
     queryGroups.forEach((group, groupIndex) => {
         if (groupIndex > 0) {
-            fragment.appendChild(createOperatorElement('OR', groupIndex - 1, true));
+            fragment.appendChild(createOperatorElement(groupOp, groupIndex - 1, true));
         }
 
         fragment.appendChild(document.createTextNode('(')); // Start group
@@ -830,7 +835,7 @@ function updateQueryArea() {
             fragment.appendChild(newEl);
 
             if (tagIndex < group.length - 1) {
-                fragment.appendChild(createOperatorElement('AND', groupIndex, false, tagIndex));
+                fragment.appendChild(createOperatorElement(withinOp, groupIndex, false, tagIndex));
             }
         });
 
@@ -1359,20 +1364,28 @@ function removeTagFromGroup(groupIndex, tagIndex) {
 }
 
 function handleTagClick(tag) {
-    let lastGroup = queryGroups[queryGroups.length - 1];
-    let tagExistsInLastGroup = lastGroup && lastGroup.some(t => t.tag === tag);
-
-    if (!lastGroup) {
-        // Create a new group if there's no last group
-        lastGroup = [{ tag: tag, negated: false }];
-        queryGroups.push(lastGroup);
-    } else if (!tagExistsInLastGroup) {
-        // Add tag to the last group if it doesn't exist
-        lastGroup.push({ tag: tag, negated: false });
+    if (queryMode === 'cnf') {
+        // CNF: each tag gets its own group (AND semantics between groups)
+        const existing = queryGroups.flat().find(t => t.tag === tag);
+        if (existing) {
+            existing.negated = !existing.negated;
+        } else {
+            queryGroups.push([{ tag: tag, negated: false }]);
+        }
     } else {
-        // Toggle negation if the tag exists in the last group
-        let tagObject = lastGroup.find(t => t.tag === tag);
-        tagObject.negated = !tagObject.negated;
+        // DNF: tags join the last group (AND within group)
+        let lastGroup = queryGroups[queryGroups.length - 1];
+        let tagExistsInLastGroup = lastGroup && lastGroup.some(t => t.tag === tag);
+
+        if (!lastGroup) {
+            lastGroup = [{ tag: tag, negated: false }];
+            queryGroups.push(lastGroup);
+        } else if (!tagExistsInLastGroup) {
+            lastGroup.push({ tag: tag, negated: false });
+        } else {
+            let tagObject = lastGroup.find(t => t.tag === tag);
+            tagObject.negated = !tagObject.negated;
+        }
     }
     updateQueryArea();
     tagFilter.value = '';
@@ -1381,16 +1394,23 @@ function handleTagClick(tag) {
 }
 
 function handleRangeClick(minValue, maxValue) {
-    let lastGroup = queryGroups[queryGroups.length - 1];
-    let tagExistsInLastGroup = lastGroup && lastGroup.some(t => t.minValue === minValue && t.maxValue === maxValue);
+    if (queryMode === 'cnf') {
+        // CNF: each range gets its own group (AND semantics between groups)
+        const existing = queryGroups.flat().find(t => t.minValue === minValue && t.maxValue === maxValue);
+        if (!existing) {
+            queryGroups.push([{ minValue: minValue, maxValue: maxValue }]);
+        }
+    } else {
+        // DNF: ranges join the last group (AND within group)
+        let lastGroup = queryGroups[queryGroups.length - 1];
+        let tagExistsInLastGroup = lastGroup && lastGroup.some(t => t.minValue === minValue && t.maxValue === maxValue);
 
-    if (!lastGroup) {
-        // Create a new group if there's no last group
-        lastGroup = [{ minValue: minValue, maxValue: maxValue }];
-        queryGroups.push(lastGroup);
-    } else if (!tagExistsInLastGroup) {
-        // Add tag to the last group if it doesn't exist
-        lastGroup.push({ minValue: minValue, maxValue: maxValue });
+        if (!lastGroup) {
+            lastGroup = [{ minValue: minValue, maxValue: maxValue }];
+            queryGroups.push(lastGroup);
+        } else if (!tagExistsInLastGroup) {
+            lastGroup.push({ minValue: minValue, maxValue: maxValue });
+        }
     }
     updateQueryArea();
 }
@@ -1399,20 +1419,28 @@ function handleNoteClick(note) {
     if (!note) {
         return;
     }
-    let lastGroup = queryGroups[queryGroups.length - 1];
-    let noteExistsInLastGroup = lastGroup && lastGroup.some(n => n.title === note.title && n.externalId === note.externalId);
-
-    if (!lastGroup) {
-        // Create a new group if there's no last group
-        lastGroup = [{ title: note.title, externalId: note.externalId, negated: false}];
-        queryGroups.push(lastGroup);
-    } else if (!noteExistsInLastGroup) {
-        // Add note to the last group if it doesn't exist
-        lastGroup.push({ title: note.title, externalId: note.externalId, negated: false });
+    if (queryMode === 'cnf') {
+        // CNF: each note gets its own group (AND semantics between groups)
+        const existing = queryGroups.flat().find(n => n.title === note.title && n.externalId === note.externalId);
+        if (existing) {
+            existing.negated = !existing.negated;
+        } else {
+            queryGroups.push([{ title: note.title, externalId: note.externalId, negated: false }]);
+        }
     } else {
-        // Toggle negation if the note exists in the last group
-        let noteObject = lastGroup.find(n => n.title === note.title);
-        noteObject.negated = !noteObject.negated;
+        // DNF: notes join the last group (AND within group)
+        let lastGroup = queryGroups[queryGroups.length - 1];
+        let noteExistsInLastGroup = lastGroup && lastGroup.some(n => n.title === note.title && n.externalId === note.externalId);
+
+        if (!lastGroup) {
+            lastGroup = [{ title: note.title, externalId: note.externalId, negated: false }];
+            queryGroups.push(lastGroup);
+        } else if (!noteExistsInLastGroup) {
+            lastGroup.push({ title: note.title, externalId: note.externalId, negated: false });
+        } else {
+            let noteObject = lastGroup.find(n => n.title === note.title);
+            noteObject.negated = !noteObject.negated;
+        }
     }
     updateQueryArea();
 }
@@ -1445,6 +1473,7 @@ function toggleLastTagOrNote() {
 function clearQueryArea() {
     // For example, clear the innerHTML of the query area
     queryGroups = []; // Reset the query groups
+    queryMode = DEFAULT_QUERY_MODE; // Reset to default mode
     lastGroup = queryGroups[0];
     clearNode(queryArea);
     resultFilter.placeholder = "Filter results..."; // Reset placeholder to default
@@ -1471,6 +1500,7 @@ function sendSearchMessage() {
     webviewApi.postMessage({
         name: 'searchQuery',
         query: searchQuery,
+        mode: queryMode,
     });
 }
 
@@ -2110,6 +2140,39 @@ function createContextMenu(event, result=null, index=null, commands=['insertTag'
         });
     }
 
+    // Query mode toggle (DNF / CNF)
+    if (commands.includes('queryMode')) {
+        if (cmdCount > 0) {
+            const separator = document.createElement('hr');
+            separator.classList.add('itags-search-contextSeparator');
+            fragment.appendChild(separator);
+        }
+
+        const dnfEl = document.createElement('span');
+        dnfEl.classList.add('itags-search-contextCommand');
+        dnfEl.textContent = queryMode === 'dnf' ? '✓ OR (any group)' : 'OR (any group)';
+        addEventListenerWithTracking(dnfEl, 'click', () => {
+            queryMode = 'dnf';
+            updateQueryArea();
+            sendSearchMessage();
+            removeContextMenu(contextMenu);
+        });
+        fragment.appendChild(dnfEl);
+        cmdCount++;
+
+        const cnfEl = document.createElement('span');
+        cnfEl.classList.add('itags-search-contextCommand');
+        cnfEl.textContent = queryMode === 'cnf' ? '✓ AND (all groups)' : 'AND (all groups)';
+        addEventListenerWithTracking(cnfEl, 'click', () => {
+            queryMode = 'cnf';
+            updateQueryArea();
+            sendSearchMessage();
+            removeContextMenu(contextMenu);
+        });
+        fragment.appendChild(cnfEl);
+        cmdCount++;
+    }
+
     // Default commands: show / hide sections
     if (cmdCount > 0) {
         const separator = document.createElement('hr');
@@ -2341,6 +2404,7 @@ function registerEventHandlers() {
             name: 'saveQuery',
             query: JSON.stringify(queryGroups),
             filter: resultFilter.value,
+            mode: queryMode,
         });
     });
 
@@ -2732,13 +2796,13 @@ function registerEventHandlers() {
         });
         // Handle right-click on tags in list
         if (event.target.matches('.itags-search-tag') && event.target.classList.contains('range')) {
-            createContextMenu(event, null, null, ['editQuery']);
+            createContextMenu(event, null, null, ['editQuery', 'queryMode']);
         } else if (event.target.matches('.itags-search-tag') && (event.target.classList.contains('selected') || event.target.classList.contains('negated'))) {
-            createContextMenu(event, null, null, ['insertTag', 'searchTag', 'editQuery', 'extendQuery', 'sortByTag', 'addToSort', 'replaceAll', 'removeAll']);
+            createContextMenu(event, null, null, ['insertTag', 'searchTag', 'editQuery', 'extendQuery', 'sortByTag', 'addToSort', 'replaceAll', 'removeAll', 'queryMode']);
         } else if (event.target.matches('.itags-search-tag')) {
             createContextMenu(event, null, null, ['insertTag', 'searchTag', 'extendQuery', 'sortByTag', 'addToSort', 'replaceAll', 'removeAll']);
         } else if (event.target.type !== 'text') {
-            createContextMenu(event, null, null, []);
+            createContextMenu(event, null, null, ['queryMode']);
         }
     });
 
