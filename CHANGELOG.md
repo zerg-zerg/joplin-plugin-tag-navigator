@@ -1,15 +1,41 @@
-# v2.9.1
+# [v2.10.0](https://github.com/alondmnt/joplin-plugin-tag-navigator/releases/tag/v2.10.0)
+*Released on 2026-02-22T07:23:44Z*
+
+- added: query mode 'CNF', AND of groups of tags (default for new queries)
+- added: right-click in query area to switch between AND (all groups) and OR (any group) modes
+  - see screenshot
+- added: shift+click on nav panel tag to insert into editor (#35)
+- improved: focus command shows search panel if hidden
+- improved: return focus to editor when hiding nav/search panels
+- improved: search tag at cursor keyboard shortcut (Ctrl+Alt+T) (#35)
+- fixed: filter highlighting breaking kanban note views
+- fixed: quoted filter phrases were case-sensitive
+
+<img width="416" height="80" alt="image" src="https://github.com/user-attachments/assets/187f8966-7306-4481-82a0-f4cabb0a7e7d" />
+
+**Full Changelog**: https://github.com/alondmnt/joplin-plugin-tag-navigator/compare/v2.9.1...v2.10.0
+
+---
+
+# [v2.9.1](https://github.com/alondmnt/joplin-plugin-tag-navigator/releases/tag/v2.9.1)
+*Released on 2026-02-18T10:42:09Z*
 
 - added: "sort by tag" and "add to sort" context menu commands
+  - see screenshot below
+  - this makes sorting by nested tags easier, no typing needed
 - added: "text" standard sort option
 - added: store sort, grouping, and collapse state in per-query options (#35)
+
+<img width="416" height="212" alt="image" src="https://github.com/user-attachments/assets/d261ca0f-3427-4435-92ad-6e6528d9b91f" />
+
+**Full Changelog**: https://github.com/alondmnt/joplin-plugin-tag-navigator/compare/v2.9.0...v2.9.1
 
 ---
 
 # [v2.9.0](https://github.com/alondmnt/joplin-plugin-tag-navigator/releases/tag/v2.9.0)
-*Released on 2026-02-17T22:56:43Z*
+*Released on 2026-02-17T11:57:20Z*
 
-- added: 'no grouping' mode for paragraph-level cross-note sorting
+- added: 'no grouping' mode for paragraph-level cross-note sorting and filtering
 - added: search tag at cursor from editor context menu (FR #35)
 - added: extend query from editor context menu (FR #35)
 - added: cmd/ctrl+click to extend query from nav panel (FR #35)
@@ -19,10 +45,12 @@
 - added: settings: auto-open search panel on saved query load (by @zerg-zerg, #34)
 - added: settings: nav/search panel visibility
 - improved: parallelise note content fetching in batches (see settings)
+  - this makes search and startup faster, especially on mobile
 - improved: numeric-aware comparison in tag range filtering
 - improved: prettify saved query JSON in note body
 - fixed: separate loadQuery parsing from DB reconciliation (thanks to @zerg-zerg, #31)
 - fixed: guard unnecessary writes during periodic tag conversion (#35)
+  - this makes the sync betwern Joplin tags and inline tags more reliable
 - fixed: send query and results when toggling search panel visible
 
 **Full Changelog**: https://github.com/alondmnt/joplin-plugin-tag-navigator/compare/v2.8.0...v2.9.0
@@ -32,7 +60,7 @@
 # [v2.8.0](https://github.com/alondmnt/joplin-plugin-tag-navigator/releases/tag/v2.8.0)
 *Released on 2026-02-04T22:40:59Z*
 
-- added: saved queries dropdown to search pane (see screenshot)
+- added: saved queries dropdown to search panel (see screenshot)
 - added: auto-load saved queries setting
 
 <p><img width="447" height="92" alt="image" src="https://github.com/user-attachments/assets/849d068e-def7-4444-8f5c-9ecfffd1a424" /></p>

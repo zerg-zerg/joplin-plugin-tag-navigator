@@ -29,7 +29,7 @@ For video tutorials, see the [Demos](#demos) section or the [full playlist](http
 This plugin adds inline tag support (such as #inline-tag) to [Joplin](https://joplinapp.org) in six ways:
 
 1. It adds a panel for searching and viewing tagged paragraphs across all your notes. ([video](https://www.youtube.com/watch?v=im0zjQFoXb0))
-    - **Search queries**: Search tags using logical operators (AND, OR, NOT), and using free text in the note, title, or notebook name / path.
+    - **Search queries**: Search tags using logical operators (AND, OR, NOT), and using free text in the note, title, or notebook name / path. Right-click in the query area to toggle between AND-of-ORs (default) and OR-of-ANDs modes.
     - **Save search queries** in notes and sync them across device. ([video](https://www.youtube.com/watch?v=GuzCwYxyYZ0), [tips](#saved-queries))
     - **Sort results by tags** such as priorities, dates, colors, or any other tag. Right-click a tag to sort by it or add it to a multi-key sort. ([video](https://www.youtube.com/watch?v=HvunHOc2zlM), [tips](#saved-queries))
     - **Tag-by-notes:** Search for links or [[wikilinks]] to notes (including backlinks to the current note).
@@ -51,7 +51,7 @@ This plugin adds inline tag support (such as #inline-tag) to [Joplin](https://jo
         - In a table / database. ([video](https://www.youtube.com/watch?v=L3zHletRk54), [tips](#table-views))
         - In a kanban board. ([video](https://www.youtube.com/watch?v=e7HhQJjpEJg), [tips](#kanban-views))
 3. It adds a panel for quickly navigating between inline tags that appear in the current note, or in all notes ([video](https://www.youtube.com/watch?v=h-HdX7npbIw)).
-    - Click a global tag to search for it, or Cmd/Ctrl+click to add it to the current query.
+    - Click a global tag to search for it, Cmd/Ctrl+click to add it to the current query, or Shift+click to insert it into the editor.
 4. It can convert your existing inline tags to native Joplin tags, so that they are accessible using Joplin's built-in tag search.
 5. It can convert your existing native Joplin tags to inline tags, so that they are accessible using inline tag search (this plugin). ([tips](#converting-joplin-tags))
 6. It renders inline tags and front matter in the Markdown preview, and front matter in the Markdown editor. ([tips](#styling-inline-tags))
@@ -190,6 +190,7 @@ Date tags provide flexible ways to work with dates in your notes, supporting bot
 ### Tag insertion
 
 - You may insert a tag into the note editor by:
+    - Shift+clicking on a tag in the navigation panel.
     - Starting to type a tag in the search panel, and pressing `Shift+Enter`.
     - Right-clicking on a tag in the search panel, and selecting `Insert tag`.
 
@@ -294,8 +295,8 @@ Saved queries allow you to store search configurations in notes and reuse them a
 #### Core properties
 
 - **`query`**: Array of search terms (tags, notes, ranges)
-  - Outer array represents OR groups
-  - Inner arrays represent AND groups within each OR group
+  - In CNF mode (default): outer array represents AND groups, inner arrays represent OR groups
+  - In DNF mode: outer array represents OR groups, inner arrays represent AND groups
   - Each tag term has:
     - `tag`: The search term (tag, note link, or text)
     - `negated`: Boolean indicating whether to exclude this term
@@ -306,6 +307,9 @@ Saved queries allow you to store search configurations in notes and reuse them a
   - Each range term has:
     - `minValue`
     - `maxValue`
+- **`mode`**: Query interpretation mode (optional, saved queries without mode default to `"dnf"` for backward compatibility)
+  - `"cnf"`: AND-of-ORs — results match all groups, where each group requires any of its tags (default for new queries)
+  - `"dnf"`: OR-of-ANDs — results match any group, where each group requires all its tags
 - **`filter`**: String for additional text filtering within results
 - **`displayInNote`**: Display mode when viewing in notes
   - `"false"`: Do not show results
@@ -375,7 +379,7 @@ Saved queries allow you to store search configurations in notes and reuse them a
 }
 ```
 
-This example searches for paragraphs that have both `#artist` AND `#album` tags, OR paragraphs with `#single` tag, then filters results containing "rock" anywhere in the text, and displays them in a table sorted by year (ascending) then by artist (descending). The `country` column header is renamed to "Country of Origin".
+This example uses DNF mode (no `mode` field, so saved queries default to `"dnf"`) to search for paragraphs that have both `#artist` AND `#album` tags, OR paragraphs with `#single` tag, then filters results containing "rock" anywhere in the text, and displays them in a table sorted by year (ascending) then by artist (descending). The `country` column header is renamed to "Country of Origin".
 
 </details>
 
@@ -521,6 +525,7 @@ For the Markdown editor see Rich Markdown in the [Companion plugins](#companion-
 | Ctrl + Shift + I | Focus on search panel (search tag / insert tag) |
 | Ctrl + Shift + R | Refresh the current note view |
 | Ctrl + Shift + D | Update tag database |
+| Ctrl + Alt + T   | Search tag at cursor |
 | Ctrl + Alt + D   | Replace date tags in current lines |
 | Ctrl + Shift + L | Load search query from current note |
 
