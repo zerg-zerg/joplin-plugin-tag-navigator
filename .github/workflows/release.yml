@@ -3,10 +3,10 @@ name: Release Joplin Plugin
 on:
   workflow_dispatch: # Allows manual triggering from the GitHub UI
       inputs:
-      version_tag:
-        description: 'The new version tag (e.g., v1.0.0)'
-        required: true
-        type: string
+        version_tag:
+          description: 'The new version tag (e.g., v1.0.0)'
+          required: true
+          type: string
   
 jobs:
   build_and_release:
