@@ -1,10 +1,12 @@
 name: Release Joplin Plugin
 
 on:
-  push:
-    tags:
-      - 'v*' # Trigger this workflow when a tag starting with 'v' is pushed
   workflow_dispatch: # Allows manual triggering from the GitHub UI
+      inputs:
+      version_tag:
+        description: 'The new version tag (e.g., v1.0.0)'
+        required: true
+        type: string
   
 jobs:
   build_and_release:
@@ -37,7 +39,8 @@ jobs:
           files: publish/*.jpl # Adjust this path to wherever your .jpl file is located
           draft: false
           prerelease: false
-          name: Release ${{ env.plugin_version }}
+          tag_name: ${{ github.event.inputs.version_tag }}
+          name: Release ${{ github.event.inputs.version_tag }}
           target_commitish: my-release
           body_path: CHANGELOG.md # Optional: Use the content of a CHANGELOG.md file for release notes
         env:
